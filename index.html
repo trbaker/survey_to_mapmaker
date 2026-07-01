@@ -5,6 +5,38 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Survey123 to MapMaker — share results as a web map</title>
 
+<!-- ============================ ORIGIN LOCK ============================
+     The app only runs when served from an approved origin. This is a
+     client-side guard (a deterrent, not tamper-proof security): it blocks
+     this copy from functioning if it's hosted or opened anywhere else.
+     To allow more origins (e.g. a localhost dev server), add them to the
+     array below.                                                        -->
+<script>
+  window.__ALLOWED_ORIGINS = ["https://trbaker.github.com"];
+  window.__APP_BLOCKED = window.__ALLOWED_ORIGINS.indexOf(window.location.origin) === -1;
+  if (window.__APP_BLOCKED) {
+    // hide everything immediately to avoid a flash of the real UI
+    document.documentElement.style.visibility = "hidden";
+    window.addEventListener("DOMContentLoaded", function () {
+      var here = String(window.location.origin || "this location")
+        .replace(/[&<>"']/g, function (c) {
+          return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+        });
+      document.body.innerHTML =
+        '<div style="max-width:560px;margin:16vh auto;padding:28px 30px;' +
+        'font-family:Inter,system-ui,sans-serif;border:1px solid #d7d2c4;border-radius:12px;' +
+        'background:#fff;color:#14312b;box-shadow:0 18px 40px -28px rgba(20,49,43,.5)">' +
+        '<h1 style="font-family:Space Grotesk,sans-serif;margin:0 0 10px;font-size:1.3rem">' +
+        'Not available here</h1>' +
+        '<p style="color:#3f5a52;margin:0;line-height:1.5">Survey123 to MapMaker can only run from ' +
+        'its approved address. This copy is being served from <code style="background:#f3f1e9;' +
+        'border:1px solid #d7d2c4;border-radius:4px;padding:1px 6px">' + here + '</code>, which is ' +
+        'not authorized.</p></div>';
+      document.documentElement.style.visibility = "visible";
+    });
+  }
+</script>
+
 <link rel="stylesheet" href="https://js.arcgis.com/4.31/esri/themes/light/main.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -116,6 +148,13 @@
     box-shadow:inset 0 0 0 1px var(--station)}
   .seg input:disabled + label{opacity:.4;cursor:not-allowed}
   .seg input:focus-visible + label{outline:2px solid var(--flag);outline-offset:2px}
+
+  /* marker-style swatches (single-symbol point picker) */
+  .seg.markers{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}
+  .seg.markers label{text-align:center;padding:12px 8px}
+  .seg.markers svg{display:block;width:30px;height:30px;margin:0 auto 6px;fill:var(--flag);color:var(--flag)}
+  .seg.markers input:checked + label svg{fill:var(--flag-ink);color:var(--flag-ink)}
+  .seg.markers label b{font-size:.85rem}
 
   .btn{font:inherit;font-weight:600;border-radius:8px;border:1px solid transparent;
     padding:11px 20px;cursor:pointer;transition:.15s;font-family:"Space Grotesk",sans-serif}
@@ -264,6 +303,7 @@
         <input type="radio" name="share" id="s-public" value="public">
         <label for="s-public"><b>Public</b><small>Anyone with the link</small></label>
       </div>
+      <p class="note" id="shareConstraintNote" style="display:none;margin-top:10px"></p>
       <div class="callout warn" id="publicWarn" style="margin-top:14px;display:none">
         Public sharing exposes the underlying survey records to anyone. Confirm your data contains no
         personal or sensitive information before continuing.
@@ -316,6 +356,27 @@
         <label for="sym-size"><b>Counts — size</b><small>Graduated size (number)</small></label>
       </div>
       <p class="note" id="symHint" style="margin-top:10px"></p>
+
+      <div id="markerStylesWrap" style="display:none;margin-top:14px">
+        <label class="field" style="margin:0 0 6px"><span>Marker style</span></label>
+        <div class="seg markers" role="radiogroup" aria-label="Marker style">
+          <input type="radio" name="marker" id="mk-circle" value="circle" checked>
+          <label for="mk-circle">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="9"/></svg><b>Circle</b></label>
+          <input type="radio" name="marker" id="mk-square" value="square">
+          <label for="mk-square">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="8" y="8" width="16" height="16" rx="1"/></svg><b>Square</b></label>
+          <input type="radio" name="marker" id="mk-diamond" value="diamond">
+          <label for="mk-diamond">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 5 27 16 16 27 5 16Z"/></svg><b>Diamond</b></label>
+          <input type="radio" name="marker" id="mk-triangle" value="triangle">
+          <label for="mk-triangle">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 6 27 26 5 26Z"/></svg><b>Triangle</b></label>
+          <input type="radio" name="marker" id="mk-x" value="x">
+          <label for="mk-x">
+            <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M9 9 23 23M23 9 9 23"/></svg><b>Cross</b></label>
+        </div>
+      </div>
 
       <div class="maprow" style="margin-top:8px">
         <div id="previewView"></div>
@@ -379,6 +440,9 @@ require([
 ){
   "use strict";
 
+  // origin lock: if we're not on an approved host, do not initialize anything
+  if (window.__APP_BLOCKED) return;
+
   // ---- element helpers ---------------------------------------------------
   const $ = (id) => document.getElementById(id);
   const show = (el, on=true) => el.hidden = !on;
@@ -386,8 +450,9 @@ require([
   // ---- app state ---------------------------------------------------------
   const state = {
     portal: null, username: null, token: null, portalUrl: "https://www.arcgis.com",
-    surveyName: "", shareLevel: "private",
+    surveyName: "", shareLevel: "private", minShareRank: 0,
     fsItem: null, sublayerId: 0, previewLayer: null, view: null,
+    geometryType: null, markerStyle: "circle",
     field: null, fieldType: null, symbology: "single", renderer: null
   };
 
@@ -549,14 +614,17 @@ require([
         sel.appendChild(o);
       });
       sel.disabled = false;
+      constrainSharingToItem(null); // nothing selected yet → all levels open
     } catch(err){
       sel.innerHTML = '<option value="">Couldn’t load surveys — ' + escapeHtml(errMsg(err)) + '</option>';
       sel.disabled = true;
     }
   }
 
-  $("surveySelect").addEventListener("change", () => {
-    $("btnFind").disabled = !$("surveySelect").value;
+  $("surveySelect").addEventListener("change", async () => {
+    const item = surveyItems[$("surveySelect").value] || null;
+    $("btnFind").disabled = !item;
+    await constrainSharingToItem(item);
   });
 
   document.querySelectorAll('input[name=share]').forEach(r => {
@@ -564,6 +632,55 @@ require([
       $("publicWarn").style.display = ($("s-public").checked ? "block" : "none");
     });
   });
+
+  // ---- sharing floor: can't share more privately than the results layer ----
+  // Broadness: public (2, broadest) > org (1) > private (0, narrowest).
+  function shareRank(access){
+    if (access === "public") return 2;
+    if (access === "org")    return 1;
+    return 0; // private, group-shared, or unknown → narrowest
+  }
+
+  async function getItemAccess(item){
+    if (item && item.access) return item.access;
+    try {
+      const base = state.portalUrl.replace(/\/+$/,"");
+      const info = await (await fetch(`${base}/sharing/rest/content/items/${item.id}?f=json${tokenQS()}`)).json();
+      return info.access || "private";
+    } catch(e){ return "private"; }
+  }
+
+  // Disable any sharing option more private than the layer's current level.
+  async function constrainSharingToItem(item){
+    const opts = [["s-private",0],["s-org",1],["s-public",2]];
+    const note = $("shareConstraintNote");
+
+    if (!item){
+      opts.forEach(([id]) => { $(id).disabled = false; });
+      state.minShareRank = 0;
+      note.style.display = "none";
+      return;
+    }
+
+    const access = await getItemAccess(item);
+    const rank = shareRank(access);
+    state.minShareRank = rank;
+
+    opts.forEach(([id, r]) => { $(id).disabled = (r < rank); });
+
+    // if the current pick is now too private, bump it up to the layer's level
+    const checked = document.querySelector('input[name=share]:checked');
+    if (checked.disabled){
+      $(({0:"s-private",1:"s-org",2:"s-public"})[rank]).checked = true;
+    }
+    $("publicWarn").style.display = ($("s-public").checked ? "block" : "none");
+
+    const label = {0:"Private", 1:"Organization", 2:"Public"}[rank];
+    note.style.display = "block";
+    note.textContent = rank === 0
+      ? "The results layer is currently Private. You can keep it Private or share more broadly."
+      : `The results layer is currently shared as ${label}. You can match that or share more broadly — not more privately.`;
+  }
 
   // strip the "_results" suffix into a friendly survey name
   function deriveSurveyName(title){
@@ -582,6 +699,13 @@ require([
     state.fsItem = item;
     state.surveyName = deriveSurveyName(item.title);
     state.shareLevel = document.querySelector('input[name=share]:checked').value;
+
+    // safety net: never allow a level more private than the layer's current sharing
+    const pickedRank = shareRank(state.shareLevel === "public" ? "public" : state.shareLevel === "org" ? "org" : "private");
+    if (typeof state.minShareRank === "number" && pickedRank < state.minShareRank){
+      alert("That sharing level is more private than the results layer's current sharing. Choose the layer's level or broader.");
+      return;
+    }
 
     const btn = $("btnFind");
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Loading layer…';
@@ -654,6 +778,7 @@ require([
         layerId: state.sublayerId
       });
       await state.previewLayer.load();
+      state.geometryType = state.previewLayer.geometryType; // point | polyline | polygon | ...
 
       // populate field dropdown (skip system / non-data fields)
       const skip = new Set(["esriFieldTypeGeometry","esriFieldTypeGlobalID","esriFieldTypeOID","esriFieldTypeBlob","esriFieldTypeRaster","esriFieldTypeGUID","esriFieldTypeXML"]);
@@ -723,16 +848,43 @@ require([
   }
 
   document.querySelectorAll('input[name=sym]').forEach(r => r.addEventListener("change", applySymbology));
+  document.querySelectorAll('input[name=marker]').forEach(r => r.addEventListener("change", applySymbology));
+
+  // show the marker-style picker only for single symbol on point layers
+  function updateMarkerPickerVisibility(){
+    const kind = document.querySelector('input[name=sym]:checked').value;
+    const on = (kind === "single" && state.geometryType === "point");
+    $("markerStylesWrap").style.display = on ? "block" : "none";
+  }
+
+  // a simple point renderer using the chosen marker shape (brand-colored)
+  function buildMarkerRenderer(style){
+    const brand = [207, 90, 43, 1];      // survey-flag orange
+    let symbol;
+    if (style === "x" || style === "cross"){
+      symbol = { type:"simple-marker", style, size:12, color:[0,0,0,0], outline:{ color:brand, width:2.5 } };
+    } else {
+      symbol = { type:"simple-marker", style, size:9, color:[207,90,43,0.9], outline:{ color:[255,255,255,0.9], width:1 } };
+    }
+    return { type:"simple", symbol };
+  }
 
   async function applySymbology(){
     const kind = document.querySelector('input[name=sym]:checked').value;
     state.symbology = kind;
+    updateMarkerPickerVisibility();
     const layer = state.mapLayer;
     if (!layer) return;
     try {
       let renderer = null;
       if (kind === "single"){
-        renderer = null; // keep the layer's default drawing
+        if (state.geometryType === "point"){
+          const mk = (document.querySelector('input[name=marker]:checked') || {}).value || "circle";
+          state.markerStyle = mk;
+          renderer = buildMarkerRenderer(mk);   // apply chosen marker shape
+        } else {
+          renderer = null; // lines/polygons keep their default single fill/line
+        }
       } else if (kind === "categories"){
         const r = await typeRC.createRenderer({ layer, field: state.field, view: state.view, defaultSymbolEnabled:true });
         renderer = r.renderer;
@@ -769,10 +921,12 @@ require([
     const levelText = {private:"Private (only you)", org:"Your organization", public:"Public (anyone)"}[state.shareLevel];
     const symText = {single:"Single symbol", categories:`Categories on ${state.field}`,
                      color:`Graduated color on ${state.field}`, size:`Graduated size on ${state.field}`}[state.symbology];
+    const symDetail = (state.symbology === "single" && state.geometryType === "point")
+      ? `${symText} · ${state.markerStyle || "circle"} marker` : symText;
     $("reviewBox").innerHTML =
       `<b>Survey:</b> ${escapeHtml(state.surveyName)}<br>` +
       `<b>Data layer:</b> ${escapeHtml(state.fsItem.title)} (sublayer ${state.sublayerId})<br>` +
-      `<b>Symbology:</b> ${escapeHtml(symText)}<br>` +
+      `<b>Symbology:</b> ${escapeHtml(symDetail)}<br>` +
       `<b>Refresh:</b> survey layer auto-refreshes every 5 minutes<br>` +
       `<b>Sharing:</b> ${escapeHtml(levelText)} — applied to both the web map and the results layer.`;
     goStep(4);
