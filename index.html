@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Survey123 to MapMaker — share results as a web map</title>
+
+<link rel="stylesheet" href="https://js.arcgis.com/4.31/esri/themes/light/main.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  /* ---- Field-survey / topographic direction -------------------------------
+     Palette named after survey kit: pine ink, paper, contour graphite,
+     a single "flag" accent used only for the primary action.            */
+  :root{
+    --ink:      #14312b;   /* dark pine — primary text + brand           */
+    --ink-soft: #3f5a52;
+    --paper:    #f3f1e9;   /* field-notebook paper                       */
+    --surface:  #ffffff;
+    --line:     #d7d2c4;   /* hairline rules / contour graphite          */
+    --line-2:   #e7e3d8;
+    --flag:     #cf5a2b;   /* survey-flag orange — reserved for CTAs      */
+    --flag-ink: #a5401b;
+    --station:  #1f6f5c;   /* traverse green — active station            */
+    --ok:       #2f7d55;
+    --warn:     #b4472a;
+    --shadow: 0 1px 0 var(--line-2), 0 18px 40px -28px rgba(20,49,43,.5);
+    --r: 10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:"Inter",system-ui,sans-serif;
+    color:var(--ink);
+    background:var(--paper);
+    /* faint survey grid */
+    background-image:
+      linear-gradient(rgba(20,49,43,.035) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(20,49,43,.035) 1px,transparent 1px);
+    background-size:26px 26px;
+    -webkit-font-smoothing:antialiased;
+    line-height:1.5;
+  }
+  h1,h2,h3,.disp{font-family:"Space Grotesk",sans-serif;letter-spacing:-.01em}
+  .mono{font-family:"IBM Plex Mono",monospace}
+
+  /* ---- header with contour signature ---- */
+  header.masthead{
+    position:relative;overflow:hidden;
+    background:var(--ink);color:var(--paper);
+    border-bottom:3px solid var(--flag);
+  }
+  header .contours{position:absolute;inset:0;width:100%;height:100%;opacity:.5}
+  header .wrap{position:relative;max-width:1180px;margin:0 auto;padding:22px 28px;
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .brandmark{
+    width:40px;height:40px;flex:0 0 auto;border:2px solid var(--flag);border-radius:8px;
+    display:grid;place-items:center;background:rgba(255,255,255,.04)}
+  .brandmark svg{width:22px;height:22px}
+  header h1{font-size:1.25rem;margin:0;line-height:1.1}
+  header .tag{font-size:.72rem;color:#b9c9c2;margin-top:2px}
+  .authbar{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:.85rem}
+  .who{display:flex;align-items:center;gap:8px;color:#cfded8}
+  .who .dot{width:8px;height:8px;border-radius:50%;background:#55b18f;box-shadow:0 0 0 3px rgba(85,177,143,.25)}
+
+  /* ---- layout: traverse rail + working area ---- */
+  main{max-width:1180px;margin:0 auto;padding:26px 28px 80px;
+    display:grid;grid-template-columns:220px 1fr;gap:28px}
+  @media (max-width:860px){main{grid-template-columns:1fr;padding:20px 16px 60px}}
+
+  /* traverse rail — the steps are a real sequence, so stations are earned */
+  .rail{position:sticky;top:20px;align-self:start}
+  @media (max-width:860px){.rail{position:static}}
+  .rail ol{list-style:none;margin:0;padding:0;position:relative}
+  .rail li{display:flex;gap:12px;padding:0 0 22px;position:relative}
+  .rail li:not(:last-child)::before{content:"";position:absolute;left:14px;top:30px;bottom:0;
+    width:2px;background:repeating-linear-gradient(var(--line) 0 4px,transparent 4px 8px)}
+  .rail .peg{flex:0 0 auto;width:30px;height:30px;border-radius:50%;border:2px solid var(--line);
+    background:var(--surface);display:grid;place-items:center;font-family:"IBM Plex Mono",monospace;
+    font-size:.78rem;color:var(--ink-soft);z-index:1;transition:.2s}
+  .rail li.done .peg{border-color:var(--station);color:var(--station)}
+  .rail li.active .peg{border-color:var(--flag);background:var(--flag);color:#fff;
+    box-shadow:0 0 0 4px rgba(207,90,43,.16)}
+  .rail .lab{padding-top:4px}
+  .rail .lab b{font-family:"Space Grotesk",sans-serif;font-size:.92rem;display:block}
+  .rail .lab span{font-size:.74rem;color:var(--ink-soft)}
+  .rail li:not(.active):not(.done) .lab{opacity:.55}
+
+  /* cards / panels */
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    box-shadow:var(--shadow);padding:24px 26px;margin-bottom:20px}
+  .panel[hidden]{display:none}
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:.72rem;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--flag-ink)}
+  .panel h2{font-size:1.35rem;margin:.35rem 0 .2rem}
+  .panel .sub{color:var(--ink-soft);font-size:.92rem;margin:0 0 18px;max-width:60ch}
+
+  label.field{display:block;margin:16px 0}
+  label.field > span{display:block;font-weight:600;font-size:.85rem;margin-bottom:6px}
+  label.field small{font-weight:400;color:var(--ink-soft)}
+  input[type=text],input[type=url],select{
+    width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:8px;
+    font:inherit;background:var(--paper);color:var(--ink)}
+  input:focus,select:focus{outline:2px solid var(--flag);outline-offset:1px;border-color:transparent}
+
+  /* segmented choice (sharing level / symbology) */
+  .seg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:6px}
+  .seg input{position:absolute;opacity:0;pointer-events:none}
+  .seg label{border:1px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer;
+    background:var(--paper);transition:.15s;display:block}
+  .seg label b{font-family:"Space Grotesk",sans-serif;display:block;font-size:.95rem}
+  .seg label small{color:var(--ink-soft);font-size:.78rem}
+  .seg input:checked + label{border-color:var(--station);background:#eef6f1;
+    box-shadow:inset 0 0 0 1px var(--station)}
+  .seg input:disabled + label{opacity:.4;cursor:not-allowed}
+  .seg input:focus-visible + label{outline:2px solid var(--flag);outline-offset:2px}
+
+  .btn{font:inherit;font-weight:600;border-radius:8px;border:1px solid transparent;
+    padding:11px 20px;cursor:pointer;transition:.15s;font-family:"Space Grotesk",sans-serif}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-primary{background:var(--flag);color:#fff}
+  .btn-primary:hover:not(:disabled){background:var(--flag-ink)}
+  .btn-ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+  .btn-ghost:hover:not(:disabled){border-color:var(--ink-soft)}
+  .btn-link{background:none;border:none;color:var(--flag-ink);cursor:pointer;font:inherit;
+    text-decoration:underline;padding:0}
+  .actions{display:flex;gap:12px;align-items:center;margin-top:22px;flex-wrap:wrap}
+
+  .note{font-size:.85rem;color:var(--ink-soft)}
+  .callout{border-left:3px solid var(--flag);background:#fbf5f1;padding:12px 14px;border-radius:0 8px 8px 0;
+    font-size:.86rem;color:var(--ink)}
+  .callout.warn{border-color:var(--warn);background:#fbf1ee}
+  .callout.ok{border-color:var(--ok);background:#eef6f1}
+
+  /* found-layer card */
+  .hit{border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;gap:14px;
+    align-items:flex-start;background:var(--paper);margin-top:10px}
+  .hit .ic{flex:0 0 auto;width:34px;height:34px;border-radius:7px;background:#e7efec;
+    display:grid;place-items:center;color:var(--station)}
+  .hit b{font-family:"Space Grotesk",sans-serif}
+  .hit .meta{font-size:.78rem;color:var(--ink-soft);margin-top:2px}
+  .hit .meta code{background:#fff;border:1px solid var(--line);border-radius:4px;padding:0 5px}
+
+  /* preview map */
+  #previewView{height:420px;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:6px}
+  .maprow{display:grid;grid-template-columns:1fr;gap:16px}
+
+  /* status log */
+  .log{font-family:"IBM Plex Mono",monospace;font-size:.78rem;background:#0f2620;color:#cfe6dd;
+    border-radius:8px;padding:14px 16px;max-height:190px;overflow:auto;margin-top:16px}
+  .log div{padding:1px 0;white-space:pre-wrap}
+  .log .e{color:#ffb59b}
+  .log .s{color:#8fe0be}
+
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.4);
+    border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  details.help{margin-top:18px;border:1px dashed var(--line);border-radius:8px;padding:0 16px}
+  details.help summary{cursor:pointer;padding:12px 0;font-weight:600;font-family:"Space Grotesk",sans-serif}
+  details.help ol{padding-left:18px;font-size:.86rem;color:var(--ink-soft)}
+  details.help code{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.82em}
+
+  .result-links{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+  .result-links a{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-weight:600;
+    font-family:"Space Grotesk",sans-serif;background:var(--paper)}
+  .result-links a:hover{border-color:var(--station);background:#eef6f1}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <!-- contour-line signature: quiet topographic atmosphere -->
+  <svg class="contours" viewBox="0 0 1180 120" preserveAspectRatio="none" aria-hidden="true">
+    <g fill="none" stroke="#3a5b52" stroke-width="1">
+      <path d="M0 96 C 160 70 300 118 470 92 S 780 60 940 90 1120 74 1180 88"/>
+      <path d="M0 74 C 150 52 320 96 480 70 S 800 42 970 68 1130 54 1180 66"/>
+      <path d="M0 52 C 170 34 300 70 470 48 S 790 24 950 46 1140 34 1180 44"/>
+      <path d="M0 30 C 160 16 320 44 480 26 S 800 8 960 26 1140 16 1180 24" stroke="#cf5a2b" stroke-opacity=".5"/>
+    </g>
+  </svg>
+  <div class="wrap">
+    <div class="brandmark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#cf5a2b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Survey123 to MapMaker</h1>
+      <div class="tag">Publish Survey123 results as a MapMaker map</div>
+    </div>
+    <div class="authbar" id="authbar">
+      <span class="note" style="color:#b9c9c2">Not connected</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Traverse rail -->
+  <nav class="rail" aria-label="Progress">
+    <ol id="rail">
+      <li data-step="1"><span class="peg">01</span><span class="lab"><b>Survey</b><span>Name &amp; sharing</span></span></li>
+      <li data-step="2"><span class="peg">02</span><span class="lab"><b>Layer</b><span>Find results</span></span></li>
+      <li data-step="3"><span class="peg">03</span><span class="lab"><b>Symbolize</b><span>Field &amp; style</span></span></li>
+      <li data-step="4"><span class="peg">04</span><span class="lab"><b>Publish</b><span>Save &amp; share</span></span></li>
+    </ol>
+  </nav>
+
+  <section class="work">
+
+    <!-- CONNECT ------------------------------------------------------------ -->
+    <div class="panel" id="p-connect">
+      <div class="eyebrow">Base station</div>
+      <h2>Sign in to ArcGIS</h2>
+      <p class="sub">Enter your ArcGIS Online username and password. Survey123 to MapMaker exchanges
+        them for a short-lived token and acts as you.</p>
+
+      <label class="field">
+        <span>Username</span>
+        <input type="text" id="username" placeholder="your ArcGIS username" autocomplete="username" spellcheck="false">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+      </label>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="btnSignIn">Sign in</button>
+        <span class="note" id="authMsg"></span>
+      </div>
+
+      <div class="callout warn" style="margin-top:16px">
+        <b>Built-in accounts only.</b> Username/password sign-in works for ArcGIS built-in accounts.
+        Organizational single sign-on (SSO/SAML) and social logins can't issue a token this way and won't
+        work here. Your credentials are used once to get a token and are never stored.
+      </div>
+    </div>
+
+    <!-- STEP 1: SURVEY ----------------------------------------------------- -->
+    <div class="panel" id="p1" hidden>
+      <div class="eyebrow">Step 01 — Survey</div>
+      <h2>Which survey, and who should see it?</h2>
+      <p class="sub">Choose the Survey123 survey to publish. This list shows the hosted results layers
+        (feature services ending in <span class="mono">_results</span>) in your account, most recent first.</p>
+
+      <label class="field">
+        <span>Survey123 survey</span>
+        <select id="surveySelect" disabled>
+          <option value="">Loading your surveys…</option>
+        </select>
+      </label>
+
+      <label class="field" style="margin-bottom:6px"><span>Share the finished map &amp; data at this level</span></label>
+      <div class="seg" role="radiogroup" aria-label="Sharing level">
+        <input type="radio" name="share" id="s-private" value="private" checked>
+        <label for="s-private"><b>Private</b><small>Only you</small></label>
+        <input type="radio" name="share" id="s-org" value="org">
+        <label for="s-org"><b>Organization</b><small>Signed-in members</small></label>
+        <input type="radio" name="share" id="s-public" value="public">
+        <label for="s-public"><b>Public</b><small>Anyone with the link</small></label>
+      </div>
+      <div class="callout warn" id="publicWarn" style="margin-top:14px;display:none">
+        Public sharing exposes the underlying survey records to anyone. Confirm your data contains no
+        personal or sensitive information before continuing.
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="btnFind" disabled>Use this survey →</button>
+      </div>
+    </div>
+
+
+    <!-- STEP 2: LAYER ------------------------------------------------------ -->
+    <div class="panel" id="p2" hidden>
+      <div class="eyebrow">Step 02 — Layer</div>
+      <h2>Results layer</h2>
+      <p class="sub">This is the hosted feature layer Survey123 to MapMaker will add to your new map.</p>
+      <div id="hits"></div>
+
+      <label class="field" id="sublayerWrap" style="display:none">
+        <span>Sublayer to map <small>— this service has more than one</small></span>
+        <select id="sublayer"></select>
+      </label>
+
+      <div class="actions">
+        <button class="btn btn-ghost" id="btnBack2">← Back</button>
+        <button class="btn btn-primary" id="btnLoadFields" disabled>Read fields →</button>
+      </div>
+    </div>
+
+    <!-- STEP 3: SYMBOLIZE -------------------------------------------------- -->
+    <div class="panel" id="p3" hidden>
+      <div class="eyebrow">Step 03 — Symbolize</div>
+      <h2>Choose a field and a style</h2>
+      <p class="sub">Pick a field from the layer, then a symbology. The preview updates live before you publish.</p>
+
+      <label class="field">
+        <span>Symbolize on field</span>
+        <select id="fieldSelect"></select>
+      </label>
+
+      <label class="field" style="margin-bottom:6px"><span>Symbology</span></label>
+      <div class="seg" role="radiogroup" aria-label="Symbology">
+        <input type="radio" name="sym" id="sym-single" value="single" checked>
+        <label for="sym-single"><b>Single symbol</b><small>One style for all</small></label>
+        <input type="radio" name="sym" id="sym-cat" value="categories">
+        <label for="sym-cat"><b>Categories</b><small>Unique values (text)</small></label>
+        <input type="radio" name="sym" id="sym-color" value="color">
+        <label for="sym-color"><b>Counts — color</b><small>Graduated color (number)</small></label>
+        <input type="radio" name="sym" id="sym-size" value="size">
+        <label for="sym-size"><b>Counts — size</b><small>Graduated size (number)</small></label>
+      </div>
+      <p class="note" id="symHint" style="margin-top:10px"></p>
+
+      <div class="maprow" style="margin-top:8px">
+        <div id="previewView"></div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-ghost" id="btnBack3">← Back</button>
+        <button class="btn btn-primary" id="btnToPublish">Review &amp; publish →</button>
+      </div>
+    </div>
+
+    <!-- STEP 4: PUBLISH ---------------------------------------------------- -->
+    <div class="panel" id="p4" hidden>
+      <div class="eyebrow">Step 04 — Publish</div>
+      <h2>Save the map and set sharing</h2>
+      <p class="sub" id="reviewLine">Review below, then publish.</p>
+
+      <label class="field">
+        <span>Web map title</span>
+        <input type="text" id="mapTitle" placeholder="Survey results map">
+      </label>
+
+      <div class="callout" id="reviewBox"></div>
+
+      <div class="actions">
+        <button class="btn btn-ghost" id="btnBack4">← Back</button>
+        <button class="btn btn-primary" id="btnPublish">Create, save &amp; share</button>
+      </div>
+
+      <div class="log" id="log" hidden></div>
+
+      <div id="doneBox" hidden style="margin-top:18px">
+        <div class="callout ok" style="margin-bottom:6px"><b>Done.</b> Your map is saved and shared.</div>
+        <div class="result-links" id="links"></div>
+        <div class="actions">
+          <button class="btn btn-ghost" id="btnRestart">Publish another survey</button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<script src="https://js.arcgis.com/4.31/"></script>
+<script>
+require([
+  "esri/identity/IdentityManager",
+  "esri/portal/Portal",
+  "esri/portal/PortalQueryParams",
+  "esri/WebMap",
+  "esri/Map",
+  "esri/views/MapView",
+  "esri/layers/FeatureLayer",
+  "esri/smartMapping/renderers/color",
+  "esri/smartMapping/renderers/size",
+  "esri/smartMapping/renderers/type"
+], function(
+  esriId, Portal, PortalQueryParams,
+  WebMap, Map, MapView, FeatureLayer,
+  colorRC, sizeRC, typeRC
+){
+  "use strict";
+
+  // ---- element helpers ---------------------------------------------------
+  const $ = (id) => document.getElementById(id);
+  const show = (el, on=true) => el.hidden = !on;
+
+  // ---- app state ---------------------------------------------------------
+  const state = {
+    portal: null, username: null, token: null, portalUrl: "https://www.arcgis.com",
+    surveyName: "", shareLevel: "private",
+    fsItem: null, sublayerId: 0, previewLayer: null, view: null,
+    field: null, fieldType: null, symbology: "single", renderer: null
+  };
+
+  $("authbar").innerHTML = '<span class="note" style="color:#b9c9c2">Not connected</span>';
+
+  // remember username (never the password); portal is fixed to ArcGIS Online
+  try {
+    const saved = JSON.parse(localStorage.getItem("traverse.cfg") || "{}");
+    if (saved.username) $("username").value = saved.username;
+  } catch(e){}
+
+  // =======================================================================
+  //  CONNECT — username / password → token (ArcGIS generateToken REST)
+  // =======================================================================
+  async function signIn(){
+    const username = $("username").value.trim();
+    const password = $("password").value;
+    const portalUrl = "https://www.arcgis.com"; // fixed to ArcGIS Online
+    if (!username || !password){ $("authMsg").textContent = "Enter your username and password."; return; }
+
+    const btn = $("btnSignIn");
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Signing in…';
+    $("authMsg").textContent = "";
+    state.portalUrl = portalUrl;
+
+    try {
+      // exchange credentials for a referer-bound token
+      const body = new URLSearchParams();
+      body.set("f","json");
+      body.set("username", username);
+      body.set("password", password);
+      body.set("client","referer");
+      body.set("referer", window.location.origin);
+      body.set("expiration","120"); // minutes
+      const resp = await fetch(`${portalUrl}/sharing/rest/generateToken`, { method:"POST", body });
+      const data = await resp.json();
+
+      if (data.error || !data.token){
+        const m = data.error && data.error.message ? data.error.message : "check your username and password.";
+        $("authMsg").textContent = "Sign-in failed: " + m;
+        return;
+      }
+
+      state.token = data.token;
+      state.username = username;
+
+      // hand the token to the SDK's identity manager so FeatureLayer / WebMap /
+      // saveAs authenticate automatically across the org's hosted content
+      esriId.registerToken({
+        server: portalUrl + "/sharing/rest",
+        userId: username,
+        token: data.token,
+        expires: data.expires,
+        ssl: !!data.ssl
+      });
+
+      // clear the password field immediately; remember only the username
+      $("password").value = "";
+      localStorage.setItem("traverse.cfg", JSON.stringify({ username }));
+
+      await onSignedIn();
+    } catch(err){
+      $("authMsg").textContent = "Sign-in failed: " + errMsg(err);
+    } finally {
+      btn.disabled = false; btn.textContent = "Sign in";
+    }
+  }
+
+  async function onSignedIn(){
+    state.portal = new Portal({ url: state.portalUrl, authMode:"auto" });
+    await state.portal.load();
+    if (state.portal.user && state.portal.user.username) state.username = state.portal.user.username;
+
+    $("authbar").innerHTML =
+      '<span class="who"><span class="dot"></span>' +
+      escapeHtml(state.portal.user && state.portal.user.fullName ? state.portal.user.fullName : state.username) +
+      '</span><button class="btn-link" id="btnOut">Sign out</button>';
+    $("btnOut").onclick = signOut;
+
+    show($("p-connect"), false);
+    goStep(1);
+    loadSurveyList();
+  }
+
+  function signOut(){
+    try { esriId.destroyCredentials(); } catch(e){}
+    location.reload();
+  }
+
+  $("btnSignIn").onclick = signIn;
+  $("password").addEventListener("keydown", e => { if (e.key === "Enter") signIn(); });
+
+  // =======================================================================
+  //  STEP NAVIGATION (traverse rail)
+  // =======================================================================
+  const panels = { 1:$("p1"), 2:$("p2"), 3:$("p3"), 4:$("p4") };
+  function goStep(n){
+    Object.keys(panels).forEach(k => show(panels[k], Number(k)===n));
+    document.querySelectorAll("#rail li").forEach(li => {
+      const s = Number(li.dataset.step);
+      li.classList.toggle("active", s===n);
+      li.classList.toggle("done", s<n);
+    });
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+
+  // =======================================================================
+  //  STEP 1 — survey name + sharing level
+  // =======================================================================
+  // ---- survey dropdown ---------------------------------------------------
+  const surveyItems = {}; // itemId -> PortalItem
+
+  async function loadSurveyList(){
+    const sel = $("surveySelect");
+    sel.disabled = true;
+    sel.innerHTML = '<option value="">Loading your surveys…</option>';
+    $("btnFind").disabled = true;
+    try {
+      // page through the owner's hosted feature services, most-recently-modified first
+      let items = [], start = 1, guard = 0;
+      while (start > 0 && guard < 5){
+        const q = new PortalQueryParams({
+          query: `owner:${state.username} AND type:"Feature Service"`,
+          num: 100, start, sortField:"modified", sortOrder:"desc"
+        });
+        const res = await state.portal.queryItems(q);
+        items = items.concat(res.results || []);
+        start = (res.nextQueryParams && typeof res.nextQueryParams.start === "number")
+                  ? res.nextQueryParams.start : -1;
+        guard++;
+      }
+
+      // keep only titles ending in "_results"; dedupe; preserve modified-desc order
+      const seen = new Set();
+      const results = items.filter(it =>
+        it.type === "Feature Service" &&
+        /_results$/i.test((it.title || "").trim()) &&
+        (seen.has(it.id) ? false : (seen.add(it.id), true))
+      );
+
+      Object.keys(surveyItems).forEach(k => delete surveyItems[k]);
+      sel.innerHTML = "";
+
+      if (!results.length){
+        sel.innerHTML = '<option value="">No hosted “_results” services found in your account</option>';
+        sel.disabled = true;
+        $("btnFind").disabled = true;
+        return;
+      }
+
+      const ph = document.createElement("option");
+      ph.value = ""; ph.textContent = "Select a survey…";
+      sel.appendChild(ph);
+      results.forEach(it => {
+        surveyItems[it.id] = it;
+        const o = document.createElement("option");
+        o.value = it.id;
+        o.textContent = `${it.title}  ·  ${new Date(it.modified).toLocaleDateString()}`;
+        sel.appendChild(o);
+      });
+      sel.disabled = false;
+    } catch(err){
+      sel.innerHTML = '<option value="">Couldn’t load surveys — ' + escapeHtml(errMsg(err)) + '</option>';
+      sel.disabled = true;
+    }
+  }
+
+  $("surveySelect").addEventListener("change", () => {
+    $("btnFind").disabled = !$("surveySelect").value;
+  });
+
+  document.querySelectorAll('input[name=share]').forEach(r => {
+    r.addEventListener("change", () => {
+      $("publicWarn").style.display = ($("s-public").checked ? "block" : "none");
+    });
+  });
+
+  // strip the "_results" suffix into a friendly survey name
+  function deriveSurveyName(title){
+    const n = String(title || "").replace(/_results$/i, "").replace(/[_]+/g, " ").trim();
+    return n || String(title || "Survey");
+  }
+
+  // =======================================================================
+  //  STEP 1 → 2 — use the selected survey's results layer directly
+  // =======================================================================
+  $("btnFind").onclick = async () => {
+    const id = $("surveySelect").value;
+    const item = surveyItems[id];
+    if (!item){ alert("Select a survey first."); return; }
+
+    state.fsItem = item;
+    state.surveyName = deriveSurveyName(item.title);
+    state.shareLevel = document.querySelector('input[name=share]:checked').value;
+
+    const btn = $("btnFind");
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Loading layer…';
+    try {
+      $("hits").innerHTML = "";
+      renderHit(item);
+      $("btnLoadFields").disabled = false;
+      await loadSublayers(item);
+      goStep(2);
+    } catch(err){
+      alert("Couldn't load that layer: " + errMsg(err));
+    } finally {
+      btn.disabled = false; btn.textContent = "Use this survey →";
+    }
+  };
+
+  function renderHit(it){
+    $("hits").innerHTML =
+      `<div class="hit">
+         <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></div>
+         <div>
+           <b>${escapeHtml(it.title)}</b>
+           <div class="meta">Feature Service · owner <code>${escapeHtml(it.owner)}</code> ·
+             item <code>${it.id}</code> · modified ${new Date(it.modified).toLocaleDateString()}</div>
+         </div>
+       </div>`;
+  }
+
+  // discover sublayers of the feature service
+  async function loadSublayers(item){
+    $("sublayerWrap").style.display = "none";
+    try {
+      const data = await item.fetchData().catch(()=>null); // not needed; use url
+      const url = item.url;
+      const resp = await fetch(url + "?f=json" + tokenQS());
+      const svc = await resp.json();
+      const layers = (svc.layers||[]).concat(svc.tables||[]);
+      const sel = $("sublayer");
+      sel.innerHTML = "";
+      layers.forEach(l => {
+        const o = document.createElement("option");
+        o.value = l.id; o.textContent = `${l.id} — ${l.name}${l.type ? " ("+l.type+")":""}`;
+        sel.appendChild(o);
+      });
+      if (layers.length > 1){
+        $("sublayerWrap").style.display = "block";
+        sel.onchange = () => state.sublayerId = Number(sel.value);
+        state.sublayerId = Number(layers[0].id);
+      } else if (layers.length === 1){
+        state.sublayerId = Number(layers[0].id);
+      } else {
+        state.sublayerId = 0;
+      }
+    } catch(e){ state.sublayerId = 0; }
+  }
+
+  $("btnBack2").onclick = () => goStep(1);
+
+  // =======================================================================
+  //  STEP 3 — read fields, symbolize, live preview
+  // =======================================================================
+  $("btnLoadFields").onclick = async () => {
+    const btn = $("btnLoadFields");
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Reading…';
+    try {
+      // build the preview layer from the item + chosen sublayer
+      state.previewLayer = new FeatureLayer({
+        portalItem: { id: state.fsItem.id, portal: state.portal },
+        layerId: state.sublayerId
+      });
+      await state.previewLayer.load();
+
+      // populate field dropdown (skip system / non-data fields)
+      const skip = new Set(["esriFieldTypeGeometry","esriFieldTypeGlobalID","esriFieldTypeOID","esriFieldTypeBlob","esriFieldTypeRaster","esriFieldTypeGUID","esriFieldTypeXML"]);
+      const sel = $("fieldSelect");
+      sel.innerHTML = "";
+      state.previewLayer.fields
+        .filter(f => !skip.has(f.type))
+        .forEach(f => {
+          const o = document.createElement("option");
+          o.value = f.name;
+          o.dataset.ftype = f.type;
+          o.textContent = `${f.alias || f.name}  ·  ${prettyType(f.type)}`;
+          sel.appendChild(o);
+        });
+      sel.onchange = onFieldChange;
+
+      buildPreviewMap();
+      onFieldChange();      // sets sym options + first render
+      goStep(3);
+    } catch(err){
+      alert("Could not read the layer fields: " + errMsg(err));
+    } finally {
+      btn.disabled = false; btn.textContent = "Read fields →";
+    }
+  };
+
+  function buildPreviewMap(){
+    if (state.view){ state.view.destroy(); state.view = null; }
+    const layer = new FeatureLayer({
+      portalItem: { id: state.fsItem.id, portal: state.portal },
+      layerId: state.sublayerId
+    });
+    state.mapLayer = layer;
+    const map = new Map({ basemap:"topo-vector" });
+    map.add(layer);
+    state.view = new MapView({ container:"previewView", map });
+    state.view.when(() => {
+      layer.when(() => state.view.goTo(layer.fullExtent).catch(()=>{}));
+    });
+  }
+
+  function onFieldChange(){
+    const opt = $("fieldSelect").selectedOptions[0];
+    if (!opt) return;
+    state.field = opt.value;
+    state.fieldType = opt.dataset.ftype;
+    const numeric = isNumeric(state.fieldType);
+    const stringy = state.fieldType === "esriFieldTypeString";
+
+    // enable/disable symbology choices by field type
+    $("sym-cat").disabled   = !stringy && !numeric ? true : !(stringy || numeric); // categories ok for string or (few) numeric
+    $("sym-cat").disabled   = !stringy;      // keep categories for text fields
+    $("sym-color").disabled = !numeric;
+    $("sym-size").disabled  = !numeric;
+
+    // if current choice is now disabled, fall back to single
+    const cur = document.querySelector('input[name=sym]:checked');
+    if (cur.disabled){ $("sym-single").checked = true; }
+
+    $("symHint").textContent = numeric
+      ? "Numeric field — graduated color or size will classify the values automatically."
+      : stringy
+        ? "Text field — categories will draw each unique value in its own color."
+        : "This field type is best shown with a single symbol.";
+
+    applySymbology();
+  }
+
+  document.querySelectorAll('input[name=sym]').forEach(r => r.addEventListener("change", applySymbology));
+
+  async function applySymbology(){
+    const kind = document.querySelector('input[name=sym]:checked').value;
+    state.symbology = kind;
+    const layer = state.mapLayer;
+    if (!layer) return;
+    try {
+      let renderer = null;
+      if (kind === "single"){
+        renderer = null; // keep the layer's default drawing
+      } else if (kind === "categories"){
+        const r = await typeRC.createRenderer({ layer, field: state.field, view: state.view, defaultSymbolEnabled:true });
+        renderer = r.renderer;
+      } else if (kind === "color"){
+        const r = await colorRC.createContinuousRenderer({ layer, field: state.field, view: state.view });
+        renderer = r.renderer;
+      } else if (kind === "size"){
+        const r = await sizeRC.createContinuousRenderer({ layer, field: state.field, view: state.view });
+        renderer = r.renderer;
+      }
+      state.renderer = renderer;
+      if (renderer) layer.renderer = renderer;
+      else await resetDefaultRenderer(layer);
+    } catch(err){
+      $("symHint").textContent = "Couldn't build that style for this field (" + errMsg(err) + "). Try another field or Single symbol.";
+    }
+  }
+
+  async function resetDefaultRenderer(layer){
+    // reload item's default renderer by re-reading drawingInfo
+    try {
+      const resp = await fetch(layer.url + "?f=json" + tokenQS());
+      const def = await resp.json();
+      if (def && def.drawingInfo && def.drawingInfo.renderer){
+        layer.renderer = def.drawingInfo.renderer;
+      }
+    } catch(e){}
+  }
+
+  $("btnBack3").onclick = () => goStep(2);
+
+  $("btnToPublish").onclick = () => {
+    $("mapTitle").value = `${state.surveyName} Results Map`;
+    const levelText = {private:"Private (only you)", org:"Your organization", public:"Public (anyone)"}[state.shareLevel];
+    const symText = {single:"Single symbol", categories:`Categories on ${state.field}`,
+                     color:`Graduated color on ${state.field}`, size:`Graduated size on ${state.field}`}[state.symbology];
+    $("reviewBox").innerHTML =
+      `<b>Survey:</b> ${escapeHtml(state.surveyName)}<br>` +
+      `<b>Data layer:</b> ${escapeHtml(state.fsItem.title)} (sublayer ${state.sublayerId})<br>` +
+      `<b>Symbology:</b> ${escapeHtml(symText)}<br>` +
+      `<b>Refresh:</b> survey layer auto-refreshes every 5 minutes<br>` +
+      `<b>Sharing:</b> ${escapeHtml(levelText)} — applied to both the web map and the results layer.`;
+    goStep(4);
+  };
+
+  // =======================================================================
+  //  STEP 4 — create web map, save, share (map + feature service)
+  // =======================================================================
+  $("btnBack4").onclick = () => goStep(3);
+
+  function logLine(msg, cls){
+    const log = $("log"); show(log, true);
+    const d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = msg;
+    log.appendChild(d); log.scrollTop = log.scrollHeight;
+  }
+
+  $("btnPublish").onclick = async () => {
+    const title = $("mapTitle").value.trim() || `${state.surveyName} Results Map`;
+    const btn = $("btnPublish");
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Publishing…';
+    $("log").innerHTML = ""; show($("log"), true);
+    try {
+      // 1. build a fresh web map with the styled results layer
+      logLine("Building web map…");
+      const wmLayer = new FeatureLayer({
+        portalItem: { id: state.fsItem.id, portal: state.portal },
+        layerId: state.sublayerId
+      });
+      await wmLayer.load();
+      if (state.renderer) wmLayer.renderer = state.renderer;
+      wmLayer.refreshInterval = 5; // minutes — auto-refresh survey data in the map
+
+      const webmap = new WebMap({ basemap:"topo-vector" });
+      webmap.add(wmLayer);
+      logLine("Survey layer set to auto-refresh every 5 minutes.");
+
+      // capture the current preview extent so the saved map opens where the data is
+      logLine("Setting the map extent…");
+      if (state.view){
+        try { await webmap.updateFrom(state.view); } catch(e){}
+      }
+
+      // 2. save to the user's content
+      logLine("Saving map to your ArcGIS content…");
+      const item = await webmap.saveAs({
+        title,
+        tags: ["Survey123", state.surveyName, "Survey123 to MapMaker"],
+        snippet: `Results map for the “${state.surveyName}” survey, generated by Survey123 to MapMaker.`,
+        description: `Automatically generated from the hosted results layer <b>${escapeHtml(state.fsItem.title)}</b>.`
+      });
+      logLine("Web map saved: " + item.id, "s");
+
+      // 2b. stamp Mapmaker / Atlas typeKeywords onto the new web map item
+      logLine("Writing typeKeywords (Mapmaker, Atlas)…");
+      const tk = await addTypeKeywords(item.id, ["Mapmaker","Atlas","0cd1cdee853c413a84bfe4b9a6931f0d"]);
+      logLine("  → typeKeywords: " + tk.merged.join(", "), (tk.res && tk.res.error) ? "e" : "s");
+
+      // 3. share BOTH the web map and the results feature service to the chosen level
+      logLine("Setting sharing to “" + state.shareLevel + "” on the web map…");
+      const r1 = await shareItem(item.id, state.shareLevel);
+      logLine("  → " + JSON.stringify(r1.itemId ? {shared:r1.itemId} : r1), r1.error ? "e":"s");
+
+      logLine("Setting sharing to “" + state.shareLevel + "” on the results layer…");
+      const r2 = await shareItem(state.fsItem.id, state.shareLevel);
+      logLine("  → " + JSON.stringify(r2.itemId ? {shared:r2.itemId} : r2), r2.error ? "e":"s");
+
+      if (r1.error || r2.error){
+        logLine("Sharing returned an error — you may not have privileges to share at this level.", "e");
+      }
+
+      // 4. link — open the new web map in the MapMaker (Atlas) instant app
+      $("links").innerHTML =
+        linkRow(`https://www.arcgis.com/apps/instant/atlas/index.html?appid=0cd1cdee853c413a84bfe4b9a6931f0d&webmap=${item.id}`,
+                "Open the map in MapMaker");
+      show($("doneBox"), true);
+      logLine("All done.", "s");
+    } catch(err){
+      logLine("Publish failed: " + errMsg(err), "e");
+      alert("Publish failed: " + errMsg(err));
+    } finally {
+      btn.disabled = false; btn.textContent = "Create, save & share";
+    }
+  };
+
+  function linkRow(href, label){
+    return `<a href="${href}" target="_blank" rel="noopener">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>
+      ${label}</a>`;
+  }
+
+  // REST sharing call — private / org / public
+  async function shareItem(itemId, level){
+    const body = new URLSearchParams();
+    body.set("f","json");
+    body.set("token", currentToken());
+    if (level === "public"){ body.set("everyone","true");  body.set("org","true"); }
+    else if (level === "org"){ body.set("everyone","false"); body.set("org","true"); }
+    else { body.set("everyone","false"); body.set("org","false"); }
+    const url = `${state.portalUrl.replace(/\/+$/,"")}/sharing/rest/content/users/${encodeURIComponent(state.username)}/items/${itemId}/share`;
+    const resp = await fetch(url, { method:"POST", body });
+    return resp.json();
+  }
+
+  // Merge extra typeKeywords onto an item WITHOUT dropping the web map's
+  // required keywords (Web Map, Online Map, ...), then write via REST update.
+  async function addTypeKeywords(itemId, extra){
+    const base = state.portalUrl.replace(/\/+$/,"");
+    // read the authoritative current typeKeywords the save just generated
+    let current = [];
+    try {
+      const info = await (await fetch(`${base}/sharing/rest/content/items/${itemId}?f=json${tokenQS()}`)).json();
+      if (Array.isArray(info.typeKeywords)) current = info.typeKeywords;
+    } catch(e){}
+    const merged = current.slice();
+    extra.forEach(k => {
+      if (!merged.some(x => String(x).toLowerCase() === k.toLowerCase())) merged.push(k);
+    });
+    const body = new URLSearchParams();
+    body.set("f","json");
+    body.set("token", currentToken());
+    body.set("typeKeywords", merged.join(","));
+    const url = `${base}/sharing/rest/content/users/${encodeURIComponent(state.username)}/items/${itemId}/update`;
+    const res = await (await fetch(url, { method:"POST", body })).json();
+    return { merged, res };
+  }
+
+  $("btnRestart").onclick = () => {
+    // reset the working state but keep the session
+    ["hits"].forEach(id => $(id).innerHTML = "");
+    $("doneBox").hidden = true; $("log").innerHTML=""; $("log").hidden=true;
+    state.fsItem = null; state.renderer = null; state.symbology = "single";
+    if (state.view){ state.view.destroy(); state.view=null; }
+    $("btnFind").disabled = true;
+    goStep(1);
+    loadSurveyList(); // refresh in case a new survey appeared
+  };
+
+  // ---- token helpers -----------------------------------------------------
+  function currentToken(){
+    const cred = esriId.findCredential(state.portalUrl.replace(/\/+$/,"") + "/sharing");
+    return cred ? cred.token : state.token;
+  }
+  function tokenQS(){
+    const t = currentToken();
+    return t ? "&token=" + encodeURIComponent(t) : "";
+  }
+
+  // ---- small utils -------------------------------------------------------
+  function isNumeric(t){
+    return ["esriFieldTypeSmallInteger","esriFieldTypeInteger","esriFieldTypeSingle",
+            "esriFieldTypeDouble","esriFieldTypeBigInteger"].includes(t);
+  }
+  function prettyType(t){
+    return ({
+      esriFieldTypeString:"text", esriFieldTypeDate:"date",
+      esriFieldTypeSmallInteger:"integer", esriFieldTypeInteger:"integer",
+      esriFieldTypeBigInteger:"integer", esriFieldTypeSingle:"number",
+      esriFieldTypeDouble:"number", esriFieldTypeOID:"id"
+    })[t] || t.replace("esriFieldType","").toLowerCase();
+  }
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function errMsg(e){ return e && e.message ? e.message : (typeof e==="string"?e:JSON.stringify(e)); }
+
+  // ---- boot --------------------------------------------------------------
+  // Sign-in is manual (username/password → token); nothing to resume.
+});
+</script>
+</body>
+</html>
